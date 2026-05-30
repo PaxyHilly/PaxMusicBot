@@ -5,7 +5,5 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python bot.py
     envVars:
-      - key: DISCORD_TOKEN
-        value: MTUwODE5MTE2NjU0NDIxNjE0NA.G4v0K4.z693WRY8fi13E4f2A5vDacNBiRUl1-ldvDwcUA
       - key: PYTHON_VERSION
         value: 3.11.12
