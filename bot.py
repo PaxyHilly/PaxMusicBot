@@ -48,6 +48,7 @@ now_playing_messages = {}
 sticky_tasks = {}
 button_views = {}
 
+# ========= YT-DLP OPTIONS (FIXED WITH COOKIES) =========
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'noplaylist': True,
@@ -56,6 +57,8 @@ ytdl_format_options = {
     'default_search': 'auto',
     'source_address': '0.0.0.0',
     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'cookiefile': 'cookies.txt',
+    'extractor_args': {'youtube': {'skip': ['dash', 'hls'], 'player_client': ['android']}},
 }
 
 ffmpeg_options = {
