@@ -1,12 +1,14 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, View
+from discord.ui import Button, View, Select
 from datetime import datetime, timezone
 import asyncio
 import yt_dlp as youtube_dl
 import time
 import os
+import sys
+import warnings
 from flask import Flask
 import threading
 
@@ -182,39 +184,45 @@ def format_number(num):
         return f"{num/1000:.1f}K"
     return str(num)
 
-# ========= PROVIDER BUTTONS =========
-class ProviderButtons(View):
+# ========= PROVIDER SELECT DROPDOWN =========
+class ProviderSelect(Select):
     def __init__(self, guild_id):
-        super().__init__(timeout=60)
         self.guild_id = guild_id
-        
+        options = []
         for key, provider in PROVIDERS.items():
-            button = Button(
-                label=provider['name'],
-                emoji=provider['emoji'],
-                style=discord.ButtonStyle.secondary,
-                custom_id=key
+            options.append(
+                SelectOption(
+                    label=provider['name'],
+                    description=f"Search using {provider['name']}",
+                    emoji=provider['emoji'],
+                    value=key
+                )
             )
-            button.callback = self.create_callback(key, provider)
-            self.add_item(button)
+        super().__init__(placeholder="Choose a music provider...", options=options, min_values=1, max_values=1)
     
-    def create_callback(self, key, provider):
-        async def callback(interaction: discord.Interaction):
-            if not is_owner(interaction):
-                await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
-                return
-            
-            current_provider[interaction.guild.id] = key
-            global ytdl
-            ytdl = youtube_dl.YoutubeDL(provider['ytdl_options'])
-            
-            embed = discord.Embed(
-                title=f"{provider['emoji']} Provider Changed",
-                description=f"Now searching on **{provider['name']}**\n\nUse `/play <song>` to search!",
-                color=discord.Color.green()
-            )
-            await interaction.response.edit_message(embed=embed, view=None)
-        return callback
+    async def callback(self, interaction: discord.Interaction):
+        if not is_owner(interaction):
+            await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
+            return
+        
+        provider_key = self.values[0]
+        current_provider[interaction.guild.id] = provider_key
+        
+        provider = PROVIDERS[provider_key]
+        global ytdl
+        ytdl = youtube_dl.YoutubeDL(provider['ytdl_options'])
+        
+        embed = discord.Embed(
+            title=f"{provider['emoji']} Provider Changed",
+            description=f"Now searching on **{provider['name']}**\n\nUse `/play <song>` to search!",
+            color=discord.Color.green()
+        )
+        await interaction.response.edit_message(embed=embed, view=None)
+
+class ProviderView(View):
+    def __init__(self, guild_id):
+        super().__init__(timeout=30)
+        self.add_item(ProviderSelect(guild_id))
 
 # ========= MUSIC CONTROLS =========
 class MusicControls(View):
@@ -493,7 +501,7 @@ async def play(interaction: discord.Interaction, query: str):
         info = await asyncio.to_thread(get_song_info)
         
         if not info:
-            await interaction.followup.send(f"❌ Could not find that song on {provider['name']}!")
+            await interaction.followup.send(f"❌ Could not find that song on {provider['name']}!\n\nTry:\n• Using `/provider` to switch to SoundCloud\n• Using a direct YouTube/SoundCloud URL\n• Checking your spelling")
             return
         
         song = {
@@ -521,7 +529,8 @@ async def play(interaction: discord.Interaction, query: str):
             await interaction.followup.send(f"{provider['emoji']} Added to queue: **{song['title']}** (Position {position}) on **{provider['name']}**")
             
     except Exception as e:
-        await interaction.followup.send(f"❌ Error: {str(e)[:100]}")
+        error_msg = str(e)[:150]
+        await interaction.followup.send(f"❌ Error: {error_msg}\n\nTry switching to SoundCloud with `/provider`")
 
 @bot.tree.command(name="provider", description="Change the music provider")
 async def provider(interaction: discord.Interaction):
@@ -535,15 +544,16 @@ async def provider(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎵 Music Provider Selector",
-        description=f"**Current:** {current_emoji} {current_name}\n\nClick a button below to change the music source:",
+        description=f"**Current:** {current_emoji} {current_name}\n\nSelect from the dropdown below:",
         color=discord.Color.blue()
     )
     
     provider_list = "\n".join([f"{p['emoji']} **{p['name']}**" for p in PROVIDERS.values()])
     embed.add_field(name="📋 Available Providers", value=provider_list, inline=False)
-    embed.set_footer(text="YouTube works best | Some providers have limited catalogs")
+    embed.set_footer(text="YouTube works best | Switch to SoundCloud if YouTube blocks you")
     
-    await interaction.response.send_message(embed=embed, view=ProviderButtons(interaction.guild.id))
+    view = ProviderView(interaction.guild.id)
+    await interaction.response.send_message(embed=embed, view=view)
 
 @bot.tree.command(name="skip", description="Skip current song")
 async def skip(interaction: discord.Interaction):
