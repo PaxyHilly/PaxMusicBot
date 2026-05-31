@@ -1,14 +1,12 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Button, View, Select
+from discord.ui import Button, View
 from datetime import datetime, timezone
 import asyncio
 import yt_dlp as youtube_dl
 import time
 import os
-import sys
-import warnings
 from flask import Flask
 import threading
 
@@ -49,106 +47,25 @@ queues = {}
 now_playing_messages = {}
 sticky_tasks = {}
 button_views = {}
-current_provider = {}
 
-# ========= PROVIDER CONFIGURATIONS =========
-PROVIDERS = {
-    'youtube': {
-        'name': 'YouTube',
-        'emoji': '▶️',
-        'search_prefix': '',
-        'extractor': 'youtube',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'auto',
-            'source_address': '0.0.0.0',
-            'user_agent': 'Mozilla/5.0 (Android; Mobile; rv:109.0) Gecko/109.0 Firefox/109.0',
-            'extractor_args': {'youtube': {'player_client': ['android', 'ios'], 'skip': ['hls']}},
-        }
-    },
-    'soundcloud': {
-        'name': 'SoundCloud',
-        'emoji': '🎧',
-        'search_prefix': 'scsearch:',
-        'extractor': 'soundcloud',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'scsearch',
-            'source_address': '0.0.0.0',
-        }
-    },
-    'bandcamp': {
-        'name': 'Bandcamp',
-        'emoji': '🏪',
-        'search_prefix': 'bcsearch:',
-        'extractor': 'bandcamp',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'bcsearch',
-            'source_address': '0.0.0.0',
-        }
-    },
-    'deezer': {
-        'name': 'Deezer',
-        'emoji': '🎜',
-        'search_prefix': 'dzsearch:',
-        'extractor': 'deezer',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'dzsearch',
-            'source_address': '0.0.0.0',
-        }
-    },
-    'tidal': {
-        'name': 'Tidal',
-        'emoji': '🌊',
-        'search_prefix': 'tidalsearch:',
-        'extractor': 'tidal',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'tidalsearch',
-            'source_address': '0.0.0.0',
-        }
-    },
-    'audius': {
-        'name': 'Audius',
-        'emoji': '🎵',
-        'search_prefix': 'audiussearch:',
-        'extractor': 'audius',
-        'ytdl_options': {
-            'format': 'bestaudio/best',
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-            'default_search': 'audiussearch',
-            'source_address': '0.0.0.0',
-        }
-    }
+# ========= YT-DLP OPTIONS (FIXED FOR YOUTUBE) =========
+ytdl_format_options = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+    'extractor_args': {'youtube': {'player_client': ['android', 'ios'], 'skip': ['hls', 'dash']}},
 }
-
-# Default ytdl options (YouTube)
-default_ytdl_options = PROVIDERS['youtube']['ytdl_options'].copy()
-ytdl = youtube_dl.YoutubeDL(default_ytdl_options)
 
 ffmpeg_options = {
     'options': '-vn',
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
 }
+
+ytdl = youtube_dl.YoutubeDL(ytdl_format_options)
 
 class MusicQueue:
     def __init__(self):
@@ -177,54 +94,6 @@ def format_progress_bar(elapsed, total, width=15):
     progress = min(progress, width)
     return "█" * progress + "░" * (width - progress)
 
-def format_number(num):
-    if num >= 1000000:
-        return f"{num/1000000:.1f}M"
-    elif num >= 1000:
-        return f"{num/1000:.1f}K"
-    return str(num)
-
-# ========= PROVIDER SELECT DROPDOWN =========
-class ProviderSelect(Select):
-    def __init__(self, guild_id):
-        self.guild_id = guild_id
-        options = []
-        for key, provider in PROVIDERS.items():
-            options.append(
-                SelectOption(
-                    label=provider['name'],
-                    description=f"Search using {provider['name']}",
-                    emoji=provider['emoji'],
-                    value=key
-                )
-            )
-        super().__init__(placeholder="Choose a music provider...", options=options, min_values=1, max_values=1)
-    
-    async def callback(self, interaction: discord.Interaction):
-        if not is_owner(interaction):
-            await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
-            return
-        
-        provider_key = self.values[0]
-        current_provider[interaction.guild.id] = provider_key
-        
-        provider = PROVIDERS[provider_key]
-        global ytdl
-        ytdl = youtube_dl.YoutubeDL(provider['ytdl_options'])
-        
-        embed = discord.Embed(
-            title=f"{provider['emoji']} Provider Changed",
-            description=f"Now searching on **{provider['name']}**\n\nUse `/play <song>` to search!",
-            color=discord.Color.green()
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-
-class ProviderView(View):
-    def __init__(self, guild_id):
-        super().__init__(timeout=30)
-        self.add_item(ProviderSelect(guild_id))
-
-# ========= MUSIC CONTROLS =========
 class MusicControls(View):
     def __init__(self, guild_id):
         super().__init__(timeout=None)
@@ -321,13 +190,10 @@ async def update_now_playing(guild_id):
             elapsed_str = format_duration(elapsed)
             total_str = format_duration(total)
             
-            provider_info = PROVIDERS.get(song.get('provider', 'youtube'), PROVIDERS['youtube'])
-            
             content = (
-                f"{provider_info['emoji']} **Now Playing:** {song['title']}\n"
+                f"🎵 **Now Playing:** {song['title']}\n"
                 f"`{elapsed_str}` {progress_bar} `{total_str}`\n"
                 f"📢 Requested by: {song['requester_name']}\n"
-                f"🎵 Provider: {provider_info['name']}\n"
                 f"─── ･ ｡ﾟ☆: *.☽ .* :☆ﾟ. ───"
             )
             
@@ -391,13 +257,10 @@ async def keep_at_bottom(guild_id, channel_id):
                         elapsed_str = format_duration(elapsed)
                         total_str = format_duration(total)
                         
-                        provider_info = PROVIDERS.get(song.get('provider', 'youtube'), PROVIDERS['youtube'])
-                        
                         content = (
-                            f"{provider_info['emoji']} **Now Playing:** {song['title']}\n"
+                            f"🎵 **Now Playing:** {song['title']}\n"
                             f"`{elapsed_str}` {progress_bar} `{total_str}`\n"
                             f"📢 Requested by: {song['requester_name']}\n"
-                            f"🎵 Provider: {provider_info['name']}\n"
                             f"─── ･ ｡ﾟ☆: *.☽ .* :☆ﾟ. ───"
                         )
                         
@@ -431,13 +294,10 @@ async def play_next_song(guild):
             pass
         del now_playing_messages[guild.id]
     
-    provider_info = PROVIDERS.get(song.get('provider', 'youtube'), PROVIDERS['youtube'])
-    
     content = (
-        f"{provider_info['emoji']} **Now Playing:** {song['title']}\n"
+        f"🎵 **Now Playing:** {song['title']}\n"
         f"`0:00` {'░' * 15} `{format_duration(song.get('duration', 0))}`\n"
         f"📢 Requested by: {song['requester_name']}\n"
-        f"🎵 Provider: {provider_info['name']}\n"
         f"─── ･ ｡ﾟ☆: *.☽ .* :☆ﾟ. ───"
     )
     
@@ -459,12 +319,11 @@ async def on_ready():
     await bot.tree.sync()
     print(f"✅ Logged in as {bot.user}")
     print(f"✅ Bot is in {len(bot.guilds)} servers")
-    print("✅ 6 Music Providers Available: YouTube, SoundCloud, Bandcamp, Deezer, Tidal, Audius")
-    print("✅ Use /provider to switch providers")
+    print("✅ YouTube music bot ready!")
 
 # ========= SLASH COMMANDS =========
-@bot.tree.command(name="play", description="Play a song from current provider")
-@app_commands.describe(query="Song name or URL")
+@bot.tree.command(name="play", description="Play a song from YouTube")
+@app_commands.describe(query="Song name or YouTube URL")
 async def play(interaction: discord.Interaction, query: str):
     if not is_owner(interaction):
         await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
@@ -483,25 +342,23 @@ async def play(interaction: discord.Interaction, query: str):
     elif interaction.guild.voice_client.channel != voice_channel:
         await interaction.guild.voice_client.move_to(voice_channel)
     
-    provider_key = current_provider.get(interaction.guild.id, 'youtube')
-    provider = PROVIDERS[provider_key]
-    
-    await interaction.followup.send(f"🔍 Searching {provider['emoji']} **{provider['name']}** for `{query}`...")
+    await interaction.followup.send(f"🔍 Searching `{query}` on YouTube...")
     
     try:
         def get_song_info():
             with ytdl as ydl:
-                search_prefix = provider['search_prefix']
-                search_query = f"{search_prefix}{query}" if search_prefix else query
-                info = ydl.extract_info(search_query, download=False)
-                if info and 'entries' in info and info['entries']:
-                    return info['entries'][0]
-                return None
+                if query.startswith("http"):
+                    info = ydl.extract_info(query, download=False)
+                else:
+                    info = ydl.extract_info(f"ytsearch:{query}", download=False)
+                    if info and 'entries' in info and info['entries']:
+                        info = info['entries'][0]
+                return info
         
         info = await asyncio.to_thread(get_song_info)
         
         if not info:
-            await interaction.followup.send(f"❌ Could not find that song on {provider['name']}!\n\nTry:\n• Using `/provider` to switch to SoundCloud\n• Using a direct YouTube/SoundCloud URL\n• Checking your spelling")
+            await interaction.followup.send("❌ Could not find that song on YouTube!")
             return
         
         song = {
@@ -511,9 +368,7 @@ async def play(interaction: discord.Interaction, query: str):
             'requester_name': interaction.user.display_name,
             'requester_id': interaction.user.id,
             'channel_id': interaction.channel_id,
-            'uploader': info.get('uploader', info.get('artist', 'Unknown')),
-            'view_count': info.get('view_count', 0),
-            'provider': provider_key,
+            'uploader': info.get('uploader', 'Unknown'),
         }
         
         if interaction.guild.id not in queues:
@@ -523,37 +378,14 @@ async def play(interaction: discord.Interaction, query: str):
         
         if not interaction.guild.voice_client.is_playing():
             await play_next_song(interaction.guild)
-            await interaction.followup.send(f"{provider['emoji']} Now playing: **{song['title']}** from **{provider['name']}**")
+            await interaction.followup.send(f"🎵 Now playing: **{song['title']}**")
         else:
             position = len(queues[interaction.guild.id].queue)
-            await interaction.followup.send(f"{provider['emoji']} Added to queue: **{song['title']}** (Position {position}) on **{provider['name']}**")
+            await interaction.followup.send(f"📋 Added to queue: **{song['title']}** (Position {position})")
             
     except Exception as e:
-        error_msg = str(e)[:150]
-        await interaction.followup.send(f"❌ Error: {error_msg}\n\nTry switching to SoundCloud with `/provider`")
-
-@bot.tree.command(name="provider", description="Change the music provider")
-async def provider(interaction: discord.Interaction):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
-        return
-    
-    current = current_provider.get(interaction.guild.id, 'youtube')
-    current_name = PROVIDERS[current]['name']
-    current_emoji = PROVIDERS[current]['emoji']
-    
-    embed = discord.Embed(
-        title="🎵 Music Provider Selector",
-        description=f"**Current:** {current_emoji} {current_name}\n\nSelect from the dropdown below:",
-        color=discord.Color.blue()
-    )
-    
-    provider_list = "\n".join([f"{p['emoji']} **{p['name']}**" for p in PROVIDERS.values()])
-    embed.add_field(name="📋 Available Providers", value=provider_list, inline=False)
-    embed.set_footer(text="YouTube works best | Switch to SoundCloud if YouTube blocks you")
-    
-    view = ProviderView(interaction.guild.id)
-    await interaction.response.send_message(embed=embed, view=view)
+        error_msg = str(e)[:200]
+        await interaction.followup.send(f"❌ Error: {error_msg}\n\nTry using a direct YouTube URL or a different song name.")
 
 @bot.tree.command(name="skip", description="Skip current song")
 async def skip(interaction: discord.Interaction):
@@ -621,70 +453,21 @@ async def list_servers(interaction: discord.Interaction):
     for guild in bot.guilds:
         is_playing = "🎵 Playing" if guild.voice_client and guild.voice_client.is_playing() else "⏹️ Idle"
         queue_size = len(queues.get(guild.id, MusicQueue()).queue) if guild.id in queues else 0
-        provider = current_provider.get(guild.id, 'youtube')
-        provider_name = PROVIDERS[provider]['name']
         embed.add_field(
             name=guild.name,
-            value=f"ID: `{guild.id}`\nStatus: {is_playing}\nQueue: {queue_size} songs\nProvider: {provider_name}",
+            value=f"ID: `{guild.id}`\nStatus: {is_playing}\nQueue: {queue_size} songs",
             inline=False
         )
     
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="songinfo", description="Get info about current or searched song")
-@app_commands.describe(query="Song name (leave empty for current song)")
-async def songinfo(interaction: discord.Interaction, query: str = None):
+@bot.tree.command(name="ping", description="Check bot latency")
+async def ping(interaction):
     if not is_owner(interaction):
         await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
         return
-    
-    await interaction.response.defer()
-    
-    if not query:
-        if interaction.guild.id not in queues or not queues[interaction.guild.id].current:
-            await interaction.followup.send("❌ No song playing! Use `/songinfo <song name>` to search.")
-            return
-        song = queues[interaction.guild.id].current
-        provider_info = PROVIDERS.get(song.get('provider', 'youtube'), PROVIDERS['youtube'])
-        embed = discord.Embed(title=f"{provider_info['emoji']} Currently Playing", color=discord.Color.purple())
-        embed.add_field(name="Title", value=song['title'], inline=False)
-        embed.add_field(name="Provider", value=provider_info['name'], inline=True)
-        embed.add_field(name="Uploader", value=song.get('uploader', 'Unknown'), inline=True)
-        embed.add_field(name="Duration", value=format_duration_long(song.get('duration', 0)), inline=True)
-        embed.add_field(name="Requested by", value=song['requester_name'], inline=True)
-        await interaction.followup.send(embed=embed)
-    else:
-        provider_key = current_provider.get(interaction.guild.id, 'youtube')
-        provider = PROVIDERS[provider_key]
-        await interaction.followup.send(f"🔍 Searching {provider['emoji']} **{provider['name']}** for `{query}`...")
-        
-        def fetch_info():
-            try:
-                with ytdl as ydl:
-                    search_prefix = provider['search_prefix']
-                    search_query = f"{search_prefix}{query}" if search_prefix else query
-                    data = ydl.extract_info(search_query, download=False)
-                    if data and 'entries' in data and data['entries']:
-                        return data['entries'][0]
-                    return None
-            except:
-                return None
-        
-        info = await asyncio.to_thread(fetch_info)
-        if not info:
-            await interaction.followup.send(f"❌ Could not find that song on {provider['name']}!")
-            return
-        embed = discord.Embed(title=f"{provider['emoji']} {info.get('title', 'Unknown')}", url=info.get('webpage_url'), color=discord.Color.purple())
-        embed.add_field(name="Provider", value=provider['name'], inline=True)
-        embed.add_field(name="Uploader/Artist", value=info.get('uploader', info.get('artist', 'Unknown')), inline=True)
-        embed.add_field(name="Duration", value=format_duration_long(info.get('duration', 0)), inline=True)
-        embed.add_field(name="Views/Plays", value=format_number(info.get('view_count', 0)), inline=True)
-        thumbnail = info.get('thumbnail')
-        if thumbnail:
-            embed.set_thumbnail(url=thumbnail)
-        await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
-# ========= OTHER COMMANDS =========
 @bot.tree.command(name="dm", description="Send a DM")
 @app_commands.describe(message="What to say", user="User mention", user_id="User ID")
 async def dm(interaction, message: str, user: discord.User = None, user_id: str = None):
@@ -707,13 +490,6 @@ async def dm(interaction, message: str, user: discord.User = None, user_id: str 
         await interaction.followup.send(f"✅ Sent to {target.name}", ephemeral=True)
     except:
         await interaction.followup.send(f"❌ Can't DM {target.name}", ephemeral=True)
-
-@bot.tree.command(name="ping", description="Check bot latency")
-async def ping(interaction):
-    if not is_owner(interaction):
-        await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
-        return
-    await interaction.response.send_message(f"🏓 Pong! {round(bot.latency * 1000)}ms")
 
 @bot.tree.command(name="echo", description="Repeat your message")
 @app_commands.describe(text="Text to echo")
