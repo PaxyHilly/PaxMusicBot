@@ -47,7 +47,7 @@ queues = {}
 now_playing_messages = {}
 sticky_tasks = {}
 button_views = {}
-current_provider = {}  # Store selected provider per guild
+current_provider = {}
 
 # ========= PROVIDER CONFIGURATIONS =========
 PROVIDERS = {
@@ -182,46 +182,41 @@ def format_number(num):
         return f"{num/1000:.1f}K"
     return str(num)
 
-class ProviderSelect(discord.ui.Select):
-    def __init__(self, guild_id):
-        self.guild_id = guild_id
-        options = []
-        for key, provider in PROVIDERS.items():
-            options.append(
-                discord.SelectOption(
-                    label=provider['name'],
-                    description=f"Search using {provider['name']}",
-                    emoji=provider['emoji'],
-                    value=key
-                )
-            )
-        super().__init__(placeholder="Choose a music provider...", options=options)
-    
-    async def callback(self, interaction: discord.Interaction):
-        if not is_owner(interaction):
-            await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
-            return
-        
-        provider_key = self.values[0]
-        current_provider[interaction.guild.id] = provider_key
-        
-        # Update ytdl options for this provider
-        provider = PROVIDERS[provider_key]
-        global ytdl
-        ytdl = youtube_dl.YoutubeDL(provider['ytdl_options'])
-        
-        embed = discord.Embed(
-            title=f"{provider['emoji']} Provider Changed",
-            description=f"Now searching on **{provider['name']}**",
-            color=discord.Color.green()
-        )
-        await interaction.response.edit_message(embed=embed, view=None)
-
-class ProviderView(View):
+# ========= PROVIDER BUTTONS =========
+class ProviderButtons(View):
     def __init__(self, guild_id):
         super().__init__(timeout=60)
-        self.add_item(ProviderSelect(guild_id))
+        self.guild_id = guild_id
+        
+        for key, provider in PROVIDERS.items():
+            button = Button(
+                label=provider['name'],
+                emoji=provider['emoji'],
+                style=discord.ButtonStyle.secondary,
+                custom_id=key
+            )
+            button.callback = self.create_callback(key, provider)
+            self.add_item(button)
+    
+    def create_callback(self, key, provider):
+        async def callback(interaction: discord.Interaction):
+            if not is_owner(interaction):
+                await interaction.response.send_message("❌ Unauthorized", ephemeral=True)
+                return
+            
+            current_provider[interaction.guild.id] = key
+            global ytdl
+            ytdl = youtube_dl.YoutubeDL(provider['ytdl_options'])
+            
+            embed = discord.Embed(
+                title=f"{provider['emoji']} Provider Changed",
+                description=f"Now searching on **{provider['name']}**\n\nUse `/play <song>` to search!",
+                color=discord.Color.green()
+            )
+            await interaction.response.edit_message(embed=embed, view=None)
+        return callback
 
+# ========= MUSIC CONTROLS =========
 class MusicControls(View):
     def __init__(self, guild_id):
         super().__init__(timeout=None)
@@ -459,6 +454,7 @@ async def on_ready():
     print("✅ 6 Music Providers Available: YouTube, SoundCloud, Bandcamp, Deezer, Tidal, Audius")
     print("✅ Use /provider to switch providers")
 
+# ========= SLASH COMMANDS =========
 @bot.tree.command(name="play", description="Play a song from current provider")
 @app_commands.describe(query="Song name or URL")
 async def play(interaction: discord.Interaction, query: str):
@@ -479,7 +475,6 @@ async def play(interaction: discord.Interaction, query: str):
     elif interaction.guild.voice_client.channel != voice_channel:
         await interaction.guild.voice_client.move_to(voice_channel)
     
-    # Get current provider for this guild
     provider_key = current_provider.get(interaction.guild.id, 'youtube')
     provider = PROVIDERS[provider_key]
     
@@ -540,19 +535,15 @@ async def provider(interaction: discord.Interaction):
     
     embed = discord.Embed(
         title="🎵 Music Provider Selector",
-        description=f"Current provider: {current_emoji} **{current_name}**\n\nSelect a new provider from the dropdown below:",
+        description=f"**Current:** {current_emoji} {current_name}\n\nClick a button below to change the music source:",
         color=discord.Color.blue()
     )
     
-    embed.add_field(
-        name="Available Providers",
-        value="\n".join([f"{p['emoji']} **{p['name']}**" for p in PROVIDERS.values()]),
-        inline=False
-    )
+    provider_list = "\n".join([f"{p['emoji']} **{p['name']}**" for p in PROVIDERS.values()])
+    embed.add_field(name="📋 Available Providers", value=provider_list, inline=False)
+    embed.set_footer(text="YouTube works best | Some providers have limited catalogs")
     
-    embed.set_footer(text="YouTube works best, others may have limited catalogs")
-    
-    await interaction.response.send_message(embed=embed, view=ProviderView(interaction.guild.id))
+    await interaction.response.send_message(embed=embed, view=ProviderButtons(interaction.guild.id))
 
 @bot.tree.command(name="skip", description="Skip current song")
 async def skip(interaction: discord.Interaction):
